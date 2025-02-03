@@ -1,55 +1,46 @@
+
 #include <stdio.h>
-#include <elf.h>
-#include <assert.h>
 #include <stdlib.h>
 
-#include "elfutil.h"
+#include "vm.h"
 #include "error.h"
+#include "elfutil.h"
 
-FILE *elf = NULL;
-FILE *expected_elf = NULL;
+static VM_t vm = {0};
 
 void exit_handler(int status, void *args){
-    if(elf != NULL){
-        fclose(elf);
-    }
-    if(expected_elf != NULL){
-        fclose(expected_elf);
-    }
-    printf("here\n");
+    VM_Deinit(&vm);
     exit(status);
 }
 
 int main(int argc, char const *argv[])
 {
-    init_error_handler();
     int ret = 0;
-    elf = fopen64("demo/helloworld/hello.elf", "r");
+    init_global_error_handler();
+    ret = VM_Init(&vm, &(privileged_mem_factory){
+        .block_size = 1024,
+        .block_count = 128,
+        .default_privilege = {
+            .base_level = {
+                .read = UINT8_MAX,
+                .write = UINT8_MAX,
+                .exec = UINT8_MAX,
+            }
+        }
+    }, "world.bin");
+    if(ret != 0){
+        fprintf(stderr, "VM_Init failed: %d\n", ret);
+        return ret;
+    }
+    vm.tick_rate = 1000;
+    FILE* elf = fopen("/home/maxwell/programFiles/projects/risc-v-game/demo/helloworld/hello.elf", "rb");
     if(elf == NULL){
-        ERROR_LOG("failed to open file\n");
-        ret = 1;
-        goto ret;
+        fprintf(stderr, "elf not found\n");
+        return 1;
     }
-
-    char* bin = NULL;
-    size_t bin_size = elf2bin(elf, (void**)&bin);
-    if(0 == bin_size || bin == NULL){
-        ERROR_LOG("failed to transform elf to binary\n");
-        ret = 1;
-        goto ret;
-    }
-
-    expected_elf = fopen("demo/helloworld/hello.bin", "r");
-    char c;
-    size_t i;
-    for (i = 0; i < bin_size; i++)
-    {
-        c = getc(expected_elf);
-        assert(c == bin[i]);
-    }
-    c = getc(expected_elf);
-    assert(c == EOF);
-
-    ret:
+    ret = install_elf(elf, &vm);
+    (void)fclose(elf);
+    if(ret != 0) return 1;
+    ret = VM_Run(&vm);
     return ret;
 }

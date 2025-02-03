@@ -6,11 +6,11 @@ DEMO_DIR = demo
 CROSS_COMPILE ?=
 CC:=$(CROSS_COMPILE)gcc
 
-C_SOURCES_ALL := $(shell tree -if src | grep "\.c")
+C_SOURCES_ALL := $(wildcard $(SRC_DIR)/*.c) #$(shell tree -if src | grep "\.c")
 C_SOURCES := $(filter-out %main.c,$(C_SOURCES_ALL))
 C_MAIN := $(SRC_DIR)/main.c
-C_OBJECTS := $(patsubst src/%,build/%,$(patsubst %.c,%.o,$(C_SOURCES)))
-C_MAIN_OBJECT := $(BUILD_DIR)/main.o
+C_OBJECTS := $(patsubst src/%.c,build/%.c.o,$(C_SOURCES))
+C_MAIN_OBJECT := $(BUILD_DIR)/main.c.o
 
 C_INCLUDE=\
 	-Iinclude
@@ -31,14 +31,15 @@ TEST_OBJECTS := $(patsubst $(TEST_DIR)/%,$(BUILD_DIR)/%,$(patsubst %.c,%.test.o,
 RUNABLE_TESTS := $(patsubst $(BUILD_DIR)/%.test.o,run-test-%,$(TEST_OBJECTS))
 TESTS := $(patsubst $(TEST_DIR)/%.c,$(BUILD_DIR)/%.test,$(TEST_SOURCES))
 
-.PHONY: all main clean tests demos demo_helloworld_all demo_helloworld_clean
+.PHONY: all main clean tests demos demo_helloworld_all demo_helloworld_clean debug
 
 all: main tests demos
+debug: main demos
 
 #
 # Project Sources
 #
-$(BUILD_DIR)/%.o: $(SRC_DIR)/%.c
+$(BUILD_DIR)/%.c.o: $(SRC_DIR)/%.c
 	@mkdir -p $(dir $@)
 	@echo CC $@
 	@$(CC) -o $@ $< $(CFLAGS) -c
@@ -54,10 +55,10 @@ $(BUILD_DIR)/main: $(C_OBJECTS) $(C_MAIN_OBJECT)
 #
 # Tests
 #
-tests: $(TESTS) demos
-$(BUILD_DIR)/%.test: $(TEST_DIR)/%.c $(C_SOURCES) 
+tests: $(TESTS)
+$(BUILD_DIR)/%.test: $(TEST_DIR)/%.c $(C_SOURCES) demos
 	@echo CC $@
-	@$(CC) $^ $(CFLAGS) -o $@
+	@$(CC) $< $(C_SOURCES) $(CFLAGS) -o $@
 	@echo TEST $@
 	@cd $(BUILD_DIR)/; ../$@
 	@rm -rf $@

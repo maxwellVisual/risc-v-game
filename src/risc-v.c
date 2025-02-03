@@ -4,6 +4,8 @@
 #include <stdint.h>
 #include <assert.h>
 #include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
 
 #include "error.h"
 
@@ -39,23 +41,23 @@ static RV_Int sign_extend(RV_Uint value, uint8_t src_bits, uint8_t dest_bits)
 #define RV_FUNCT7_SET 0b0100000
 #define RV_FUNCT7_CLR 0b0000000
 
-static void lui(RV_Env *vm, RV_Cmd cmd)
+static void lui(RV_Env *env, RV_Cmd cmd)
 {
     RV_Uint imm = cmd & (~0b111111111111u);
-    vm->regs[RV_GET_RD(cmd)] = imm;
+    env->regs[RV_GET_RD(cmd)] = imm;
 }
-static void auipc(RV_Env *vm, RV_Cmd cmd)
+static void auipc(RV_Env *env, RV_Cmd cmd)
 {
     RV_Uint imm = cmd & (~0b111111111111u);
-    vm->regs[RV_GET_RD(cmd)] = imm + vm->reg_pc;
+    env->regs[RV_GET_RD(cmd)] = imm + env->reg_pc;
 }
 
-static void jal(RV_Env *vm, RV_Cmd cmd)
+static void jal(RV_Env *env, RV_Cmd cmd)
 {
     RV_RegisterIndex rd = RV_GET_RD(cmd);
     if (rd != 0)
     {
-        vm->regs[rd] = vm->reg_pc + 4;
+        env->regs[rd] = env->reg_pc + 4;
     }
     RV_Uint offset10_1 = (cmd >> 20) & 0b11111111110;
     RV_Uint offset11 = (cmd >> (20 - 11)) & (1u << 11);
@@ -63,10 +65,10 @@ static void jal(RV_Env *vm, RV_Cmd cmd)
     RV_Uint offset_sign_bit = (cmd >> (31 - 20)) & (1ull << 20);
     RV_Uint offset_bits = offset_sign_bit | offset19_12 | offset11 | offset10_1 | 0b0u;
     RV_Int offset = sign_extend(offset_bits, 20, sizeof(RV_Int) * 8);
-    vm->reg_pc += offset;
+    env->reg_pc += offset;
     JMP_FLAG_SET();
 }
-static void jalr(RV_Env *vm, RV_Cmd cmd)
+static void jalr(RV_Env *env, RV_Cmd cmd)
 {
     uint8_t funct3 = RV_GET_FUNCT3(cmd);
     if (funct3 != 0b000)
@@ -78,12 +80,12 @@ static void jalr(RV_Env *vm, RV_Cmd cmd)
     RV_RegisterIndex rs1 = RV_GET_RS1(cmd);
     if (rd != 0)
     {
-        vm->regs[rd] = vm->reg_pc + 4;
+        env->regs[rd] = env->reg_pc + 4;
     }
     RV_Uint offset_bits = (cmd >> 20);
     RV_Int offset = sign_extend(offset_bits, 12, sizeof(RV_Int) * 8);
-    RV_Ptr addr = (vm->regs[rs1] + offset) & (~0b1u);
-    vm->reg_pc = addr;
+    RV_Ptr addr = (env->regs[rs1] + offset) & (~0b1u);
+    env->reg_pc = addr;
     JMP_FLAG_SET();
 }
 
@@ -93,12 +95,12 @@ static void jalr(RV_Env *vm, RV_Cmd cmd)
 #define RV32I_BRANCH_BGE 0b101
 #define RV32I_BRANCH_BLTU 0b110
 #define RV32I_BRANCH_BGEU 0b111
-static void branch(RV_Env *vm, RV_Cmd cmd)
+static void branch(RV_Env *env, RV_Cmd cmd)
 {
     RV_RegisterIndex rs1 = RV_GET_RS1(cmd);
     RV_RegisterIndex rs2 = RV_GET_RS2(cmd);
-    RV_Int diff = ((RV_Int *)vm->regs)[rs1] - ((RV_Int *)vm->regs)[rs2];
-    RV_Int udiff = vm->regs[rs1] - vm->regs[rs2];
+    RV_Int diff = ((RV_Int *)env->regs)[rs1] - ((RV_Int *)env->regs)[rs2];
+    RV_Int udiff = env->regs[rs1] - env->regs[rs2];
 
     // RV_Uint offset_sign_bit = (cmd >> (13 - 12)) & (1u << 12);
     // RV_Uint offset10_5 = ((cmd >> 25) & 0b111111) << 5;
@@ -143,19 +145,19 @@ static void branch(RV_Env *vm, RV_Cmd cmd)
         error_handler();
         goto ret;
     }
-    vm->reg_pc += offset;
+    env->reg_pc += offset;
     JMP_FLAG_SET();
     ret:
 }
 
-static void load(RV_Env *vm, RV_Cmd cmd)
+static void load(RV_Env *env, RV_Cmd cmd)
 {
     RV_RegisterIndex rs1 = RV_GET_RS1(cmd);
     RV_RegisterIndex rd = RV_GET_RD(cmd);
 
     RV_Uint offset_bits = cmd >> 20;
     RV_Int offset = sign_extend(offset_bits, 12, sizeof(RV_Int) * 8);
-    RV_Uint base = vm->regs[rs1];
+    RV_Uint base = env->regs[rs1];
     uint8_t load_width_in_bytes;
     uint8_t use_sign_extension = 0;
     uint8_t funct3 = RV_GET_FUNCT3(cmd);
@@ -194,23 +196,23 @@ static void load(RV_Env *vm, RV_Cmd cmd)
     }
 
     RV_Uint tmp = 0;
-    vm->mem_load(&tmp, (RV_Ptr)(base + offset), load_width_in_bytes);
+    env->mem_load(env, &tmp, (RV_Ptr)(base + offset), load_width_in_bytes);
 
     if (use_sign_extension)
     {
         tmp = (RV_Uint)sign_extend(tmp, load_width_in_bytes * 8, sizeof(RV_Int) * 8);
     }
-    vm->regs[rd] = tmp;
+    env->regs[rd] = tmp;
 }
-static void store(RV_Env *vm, RV_Cmd cmd)
+static void store(RV_Env *env, RV_Cmd cmd)
 {
     RV_Uint offset11_5 = (cmd >> (25 - 5)) & 0b111111100000;
     RV_Uint offset4_0 = (cmd >> 7) & 0b11111;
     RV_Uint offset_bits = offset11_5 | offset4_0;
     RV_Int offset = sign_extend(offset_bits, 12, sizeof(RV_Int) * 8);
 
-    void *src = (void *)&(vm->regs[RV_GET_RS2(cmd)]);
-    RV_Uint base = vm->regs[RV_GET_RS1(cmd)];
+    void *src = (void *)&(env->regs[RV_GET_RS2(cmd)]);
+    RV_Uint base = env->regs[RV_GET_RS1(cmd)];
     RV_Uint width;
 
     switch (RV_GET_FUNCT3(cmd))
@@ -234,7 +236,7 @@ static void store(RV_Env *vm, RV_Cmd cmd)
         return;
     }
 
-    vm->mem_store((RV_Ptr)(base + offset), src, width);
+    env->mem_store(env, (RV_Ptr)(base + offset), src, width);
 }
 
 #define OP_IMM_ADDI 0b000
@@ -245,13 +247,13 @@ static void store(RV_Env *vm, RV_Cmd cmd)
 #define OP_IMM_ANDI 0b111
 #define OP_IMM_SLLI 0b001
 #define OP_IMM_SRLI_OR_SRAI 0b101
-static RV_Uint op_imm_shift(RV_Env *vm, RV_Uint imm, RV_Uint src, RV_Uint funct3);
-static void op_imm(RV_Env *vm, RV_Cmd cmd)
+static RV_Uint op_imm_shift(RV_Env *env, RV_Uint imm, RV_Uint src, RV_Uint funct3);
+static void op_imm(RV_Env *env, RV_Cmd cmd)
 {
     RV_Uint imm_bits = (cmd >> 20);
     RV_Int imm_signed = sign_extend(imm_bits, 12, sizeof(RV_Int) * 8);
     RV_Uint imm = imm_bits;
-    RV_Uint src = vm->regs[RV_GET_RS1(cmd)];
+    RV_Uint src = env->regs[RV_GET_RS1(cmd)];
     RV_Uint ans = 0;
     RV_Uint funct3 = RV_GET_FUNCT3(cmd);
     switch (funct3)
@@ -275,18 +277,18 @@ static void op_imm(RV_Env *vm, RV_Cmd cmd)
         ans = (src) ^ (imm_signed);
         break;
     case OP_IMM_SLLI:
-        ans = op_imm_shift(vm, imm, src, funct3);
+        ans = op_imm_shift(env, imm, src, funct3);
         break;
     case OP_IMM_SRLI_OR_SRAI:
-        ans = op_imm_shift(vm, imm, src, funct3);
+        ans = op_imm_shift(env, imm, src, funct3);
         break;
     default:
         error_handler();
         return;
     }
-    vm->regs[RV_GET_RD(cmd)] = ans;
+    env->regs[RV_GET_RD(cmd)] = ans;
 }
-static inline RV_Uint op_imm_shift(RV_Env *vm, RV_Uint imm, RV_Uint src, RV_Uint funct3)
+static inline RV_Uint op_imm_shift(RV_Env *env, RV_Uint imm, RV_Uint src, RV_Uint funct3)
 {
     RV_Uint imm11_5 = imm >> 5;
     RV_Uint shamt = imm & 0b11111;
@@ -314,12 +316,12 @@ static inline RV_Uint op_imm_shift(RV_Env *vm, RV_Uint imm, RV_Uint src, RV_Uint
 #define OP_SRL_OR_SRA 0b101
 #define OP_OR 0b110
 #define OP_AND 0b111
-static void op(RV_Env *vm, RV_Cmd cmd)
+static void op(RV_Env *env, RV_Cmd cmd)
 {
     RV_Uint funct7 = RV_GET_FUNCT7(cmd);
     RV_Uint funct3 = RV_GET_FUNCT3(cmd);
-    RV_Int src1 = (RV_Int)vm->regs[RV_GET_RS1(cmd)];
-    RV_Int src2 = (RV_Int)vm->regs[RV_GET_RS2(cmd)];
+    RV_Int src1 = (RV_Int)env->regs[RV_GET_RS1(cmd)];
+    RV_Int src2 = (RV_Int)env->regs[RV_GET_RS2(cmd)];
     RV_Int ans = 0;
     switch (funct3)
     {
@@ -373,14 +375,14 @@ static void op(RV_Env *vm, RV_Cmd cmd)
     default:
         goto error;
     }
-    vm->regs[RV_GET_RD(cmd)] = ans;
+    env->regs[RV_GET_RD(cmd)] = ans;
     return;
 error:
     error_handler();
 }
 
 /* FENCE & FENCE.TSO & PAUSE */
-static void misc_mem(RV_Env *vm, RV_Cmd cmd)
+static void misc_mem(RV_Env *env, RV_Cmd cmd)
 {
 #ifdef CONFIG_DYNAMIC_ERROR_LOG
     ERROR_LOG("error: fence type instruction detected (");
@@ -404,11 +406,11 @@ static void misc_mem(RV_Env *vm, RV_Cmd cmd)
         ERROR_LOG("0x%08x", cmd);
     }
     ERROR_LOG(")\n");
-#endif // todo: tmp
-    assert(0); // todo: this function depends on multi-threading
+#endif
+    // assert(0); // todo: this function depends on multi-threading
 }
 /* ECALL & EBREAK */
-static void system(RV_Env *vm, RV_Cmd cmd)
+static void e_system(RV_Env *env, RV_Cmd cmd)
 {
 #ifdef CONFIG_DYNAMIC_ERROR_LOG
     (void)fprintf(stderr, "error: system type instruction detected (");
@@ -426,7 +428,7 @@ static void system(RV_Env *vm, RV_Cmd cmd)
     }
     (void)fprintf(stderr, ")\n");
 #endif
-    assert(0); // todo: this function requires previliged architecture
+    // assert(0); // todo: this function requires previliged architecture
 }
 
 #ifdef CONFIG_USE_RV64
@@ -434,9 +436,9 @@ static void system(RV_Env *vm, RV_Cmd cmd)
 #define OP_IMM_32_ADDIW 0b000
 #define OP_IMM_32_SLLIW 0b001
 #define OP_IMM_32_SRLIW_OR_SRAIW 0b101
-static void op_imm_32(RV_Env *vm, RV_Cmd cmd)
+static void op_imm_32(RV_Env *env, RV_Cmd cmd)
 {
-    uint32_t src = (RV_Int)vm->regs[RV_GET_RS1(cmd)];
+    uint32_t src = (RV_Int)env->regs[RV_GET_RS1(cmd)];
     uint32_t imm_bits = cmd >> 20u;
     uint8_t shamt = imm_bits & 0b1111;
     uint32_t result;
@@ -467,13 +469,30 @@ static void op_imm_32(RV_Env *vm, RV_Cmd cmd)
     default:
         goto error;
     }
-    vm->regs[RV_GET_RD(cmd)] = result;
+    env->regs[RV_GET_RD(cmd)] = result;
     return;
 error:
     error_handler();
 }
 
 #endif // CONFIG_USE_RV64
+
+__attribute__((weak)) void op_test(RV_Env *env, RV_Cmd cmd){
+    if(cmd != 0){
+        return;
+    }
+
+    char chr = env->regs[11];
+    putchar(chr);
+    // RV_Ptr ptr = env->regs[11];
+    // RV_Int len = env->regs[12];
+    // for(int i=0; i<len; i++){
+    //     char c;
+    //     env->mem_load(env, &c, ptr+i, 1);
+    //     putchar(c);
+    // }
+    fflush(stdout);
+}
 
 #define OPCODE_LUI 0b0110111
 #define OPCODE_AUIPC 0b0010111
@@ -490,7 +509,7 @@ error:
 static struct
 {
     RV_Cmd opcode;
-    void (*handler)(RV_Env *, RV_Cmd);
+    void (*handler)(RV_Env *env, RV_Cmd cmd);
 } RV_InstructionTable[] = {
     /* RV32I */
     {OPCODE_LUI, lui},
@@ -508,19 +527,22 @@ static struct
     {OPCODE_OP, op},
 
     {OPCODE_MISC_MEM, misc_mem},
-    {OPCODE_SYSTEM, system},
+    {OPCODE_SYSTEM, e_system},
 
 #ifdef CONFIG_USE_RV64
     /* RV64I */
     {OPCODE_OP_IMM_32, op_imm_32},
 
 #endif // CONFIG_USE_RV64
+    // test
+    {0x00, op_test},
 };
 
-void RV_Exec(RV_Env *vm)
+void RV_Exec(RV_Env *env)
 {
+    env->regs[0] = 0;
     RV_Cmd cmd = 0;
-    vm->mem_load(&cmd, (RV_Ptr)vm->reg_pc, sizeof(RV_Cmd));
+    env->mem_load(env, &cmd, (RV_Ptr)env->reg_pc, sizeof(RV_Cmd));
     int i = 0;
     for (; i < sizeof(RV_InstructionTable) / sizeof(*RV_InstructionTable); i++)
     {
@@ -534,14 +556,13 @@ void RV_Exec(RV_Env *vm)
     {
 #ifdef CONFIG_DYNAMIC_ERROR_LOG
         fprintf(stderr, "error: unknonw instruction detected (0x%08x)\n", cmd);
-        assert(0);
 #endif
-        error_handler();//todo: tmp
+        error_handler();//todo: handle unknown instructions
     }
     else
     {
-        RV_InstructionTable[i].handler(vm, cmd);
-        vm->regs[0] = 0;
+        RV_InstructionTable[i].handler(env, cmd);
+        env->regs[0] = 0;
     }
     if (JMP_FLAG_GET())
     {
@@ -549,6 +570,35 @@ void RV_Exec(RV_Env *vm)
     }
     else
     {
-        vm->reg_pc += 4;
+        env->reg_pc += 4;
     }
+}
+
+RV_Env* RV_Create(privileged_mem_t* memory){
+    RV_Env* env = (RV_Env*)malloc(sizeof(RV_Env));
+    if(env == NULL){
+        return NULL;
+    }
+    if(RV_Init(env, memory)){
+        return NULL;
+    }
+    return env;
+}
+
+static int mem_load(RV_Env *this, void *dest, RV_Ptr src, uint8_t bytes){
+    return memory_get(this->memory, 0, dest, (size_t)src, bytes);
+}
+static int mem_store(RV_Env *this, RV_Ptr dest, void *src, uint8_t bytes){
+    return memory_set(this->memory, 0, dest, src, bytes);
+}
+
+int RV_Init(RV_Env* env, privileged_mem_t* memory){
+    if(NULL == memset(env->regs, 0, sizeof(RV_Env))){
+        return 1;
+    }
+    env->reg_pc = 0;
+    env->memory = memory;
+    env->mem_load = mem_load;
+    env->mem_store = mem_store;
+    return 0;
 }

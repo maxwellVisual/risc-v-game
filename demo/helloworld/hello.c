@@ -28,11 +28,18 @@ int _fstat (int, struct stat * stat){
 }
 caddr_t _sbrk (int){}
 int _close (int){}
-int _write (int fd, char *ptr, int len){
+// #pragma GCC push_options
+__attribute__((optimize("O2"))) void __io_putchar(int fd, char c){
     (void)fd;
-    (void)ptr;
-    (void)len;
+    (void)c;
     asm(".word 0");
+}
+// #pragma GCC pop_options
+int _write (int fd, char *ptr, int len){
+    for (size_t i = 0; i < len; i++)
+    {
+        __io_putchar(fd, ptr[i]);
+    }
     return len;
 }
 

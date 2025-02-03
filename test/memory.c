@@ -1,3 +1,4 @@
+
 #include "check_config.h"
 
 #include <stdio.h>
@@ -8,17 +9,29 @@
 #include <time.h>
 #include <string.h>
 
-#define FILE_NAME "world.img.test"
+#define FILE_NAME "/tmp/world.img.test"
 
 #include "memory.h"
 #include "error.h"
 
+static privileged_mem_factory factory = {
+    .block_size = 1024,
+    .block_count = 128,
+    .default_privilege = {
+        .base_level = {
+            .read = UINT8_MAX,
+            .write = UINT8_MAX,
+            .exec = UINT8_MAX,
+        }
+    }
+};
+static privileged_mem_t mem = {0};
 
 void error_handler(void){
     exit(2);
 }
 void exit_handler(int status, void *args){
-    memory_deinit();
+    memory_deinit(&mem);
     (void)remove(FILE_NAME);
     exit(status);
 }
@@ -27,38 +40,26 @@ void signal_handler(int signal){
 }
 int main(int argc, char const *argv[])
 {
-    uint32_t memory_mirror[1024/sizeof(uint32_t)];
-    init_error_handler();
-    memory_init(FILE_NAME);
+    uint32_t memory_mirror[factory.block_size * factory.block_count/sizeof(uint32_t)];
+    init_global_error_handler();
+    memory_init(&factory, &mem);
     srand((unsigned int)time(NULL));
-    for(uint32_t i=0; i<1024/sizeof(uint32_t); i++){
+    for(uint32_t i=0; i<factory.block_count * factory.block_size/sizeof(uint32_t); i++){
         uint32_t data = 0;
         for(int j=0; j<4; j++){
             data <<= 8;
             data |= (uint8_t)rand();
         }
-        memory_set_u32(data, i*sizeof(uint32_t));
+        memory_set(&mem, 0, i*sizeof(uint32_t), &data, sizeof(uint32_t));
         memory_mirror[i] = data;
     }
-
-    for(int i=0; i<1024/sizeof(uint8_t); i++){
-        uint8_t buf = memory_get_u8(i * sizeof(uint8_t));
-        uint8_t mirror = ((uint8_t*)memory_mirror)[i];
-        assert(buf == mirror);
-    }
-    for(int i=0; i<1024/sizeof(uint16_t); i++){
-        uint16_t buf = memory_get_u16(i * sizeof(uint16_t));
-        assert(buf == ((uint16_t*)memory_mirror)[i]);
-    }
-    for(int i=0; i<1024/sizeof(uint32_t); i++){
-        uint32_t buf = memory_get_u32(i * sizeof(uint32_t));
-        assert(buf == ((uint32_t*)memory_mirror)[i]);
-    }
-    for(int i=0; i<1024/sizeof(uint64_t); i++){
-        uint64_t buf = memory_get_u64(i * sizeof(uint64_t));
-        assert(buf == ((uint64_t*)memory_mirror)[i]);
-    }
-
+    FILE* file = fopen(FILE_NAME, "wb+");
+    memory_save(&mem, file);
+    memory_deinit(&mem);
+    fclose(file);
+    file = fopen(FILE_NAME, "r");
+    memory_load(&mem, file);
+    fclose(file);
     uint64_t count = 0;
     while(count < 10000){
         uint8_t r = rand();
@@ -75,64 +76,45 @@ int main(int argc, char const *argv[])
                 data <<= 8;
                 data |= (uint8_t)rand();
             }
+            memory_set(&mem, 0, offset, &data, size);
             switch(size){
                 case 1:
-                    memory_set_u8((uint8_t)data, offset);
                     *((uint8_t*)(((uint8_t*)memory_mirror)+offset)) = (uint8_t)data;
                     break;
                 case 2:
-                    memory_set_u16((uint16_t)data, offset);
                     *((uint16_t*)(((uint8_t*)memory_mirror)+offset)) = (uint16_t)data;
                     break;
                 case 4:
-                    memory_set_u32((uint32_t)data, offset);
                     *((uint32_t*)(((uint8_t*)memory_mirror)+offset)) = (uint32_t)data;
                     break;
                 case 8:
-                    memory_set_u64((uint64_t)data, offset);
                     *((uint64_t*)(((uint8_t*)memory_mirror)+offset)) = (uint64_t)data;
                     break;
             }
         }else{
             /* get */
+            uint64_t buf = 0;
+            uint64_t mirror = 0;
+            memory_get(&mem, 0, &buf, offset, size);
             switch(size){
                 case 1:
-                    uint8_t buf1 = memory_get_u8(offset);
-                    uint8_t mirror1 = ((uint8_t*)memory_mirror)[offset];
-                    if(buf1 != mirror1){
-                        printf("%x %x\n", buf1, mirror1);
-                    }
-                    assert(buf1 == mirror1);
+                    mirror |= ((uint8_t*)memory_mirror)[offset];
                     break;
                 case 2:
-                    uint16_t buf2 = memory_get_u16(offset);
-                    uint16_t mirror2 = *(uint16_t*)(((uint8_t*)memory_mirror)+offset);
-                    if(buf2 != mirror2){
-                        printf("%x %x\n", buf2, mirror2);
-                    }
-                    assert(buf2 == mirror2);
+                    mirror |= *(uint16_t*)(((uint8_t*)memory_mirror)+offset);
                     break;
                 case 4:
-                    uint32_t buf4 = memory_get_u32(offset);
-                    uint32_t mirror4 = *(uint32_t*)(((uint8_t*)memory_mirror)+offset);
-                    if(buf4 != mirror4){
-                        printf("%x %x\n", buf4, mirror4);
-                    }
-                    assert(buf4 == mirror4);
+                    mirror |= *(uint32_t*)(((uint8_t*)memory_mirror)+offset);
                     break;
                 case 8:
-                    uint64_t buf8 = memory_get_u64(offset);
-                    uint64_t mirror8 = *(uint64_t*)(((uint8_t*)memory_mirror)+offset);
-                    if(buf8 != mirror8){
-                        printf("%lx %lx\n", buf8, mirror8);
-                    }
-                    assert(buf8 == mirror8);
+                    mirror |= *(uint64_t*)(((uint8_t*)memory_mirror)+offset);
                     break;
             }
+            assert(buf == mirror);
         }
         count++;
     }
 
-    // memory_deinit();
+    memory_deinit(&mem);
     return 0;
 }

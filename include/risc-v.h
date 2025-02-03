@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdint.h>
+#include <memory.h>
 
 #ifdef CONFIG_USE_RV_E
 #   define RV_GP_REGISTERS_COUNT 16
@@ -20,15 +21,17 @@ typedef RV_Uint RV_Register;
 typedef RV_Uint RV_Ptr;
 typedef uint8_t RV_RegisterIndex;
 typedef uint32_t RV_Cmd;
-typedef void (*RV_MemoryLoader)(void *dest, RV_Ptr src, uint8_t bytes);
-typedef void (*RV_MemoryStorer)(RV_Ptr dest, void *src, uint8_t bytes);
 
-typedef struct
+typedef struct _RV_Env
 {
     RV_Register regs[RV_GP_REGISTERS_COUNT];
     RV_Register reg_pc;
-    RV_MemoryLoader mem_load;
-    RV_MemoryStorer mem_store;
+    privileged_mem_t* memory;
+
+    int (*mem_load)(struct _RV_Env* this, void *dest, RV_Ptr src, uint8_t bytes);
+    int (*mem_store)(struct _RV_Env* this, RV_Ptr dest, void *src, uint8_t bytes);
 } RV_Env;
 
+extern int RV_Init(RV_Env* env, privileged_mem_t* memory);
+extern RV_Env* RV_Create(privileged_mem_t* mem);
 extern void RV_Exec(RV_Env *vm);

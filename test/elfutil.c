@@ -21,7 +21,7 @@ void exit_handler(int status, void *args){
 
 int main(int argc, char const *argv[])
 {
-    init_error_handler();
+    init_global_error_handler();
     int ret = 0;
     elf = fopen64("../demo/helloworld/hello.elf", "r");
     assert(elf != NULL);

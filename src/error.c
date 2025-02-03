@@ -14,7 +14,7 @@ __attribute__((weak)) void exit_handler(int status, void *args){
 __attribute__((weak)) void signal_handler(int signal){
     exit(1);
 }
-extern void init_error_handler(void){
+void init_global_error_handler(void){
     if(0 != on_exit(exit_handler, NULL)){
         error_handler();
     }

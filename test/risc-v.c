@@ -1,6 +1,5 @@
 #include "check_config.h"
 
-
 #include <stdio.h>
 #include <stdint.h>
 #define RAND_MAX UINT8_MAX
@@ -12,8 +11,14 @@
 #include "memory.h"
 #include "error.h"
 #include "risc-v.h"
+#include "memory.h"
 
 static FILE *bin = NULL;
+static privileged_mem_factory factory = {
+    .block_size = 1024,
+    .block_count = 128,
+};
+static privileged_mem_t mem = {0};
 
 void error_handler(void){
     exit(2);
@@ -26,25 +31,25 @@ void exit_handler(int status, void *args){
         (void)fclose(bin);
         bin = NULL;
     }
-    memory_deinit();
+    memory_deinit(&mem);
     exit(status);
 }
 void signal_handler(int signal){
     exit(1);
 }
 
-static void mem_load(void *dest, RV_Ptr src, uint8_t bytes){
-    memory_get(dest, (size_t)src, bytes);
+static int mem_load(RV_Env *this, void *dest, RV_Ptr src, uint8_t bytes){
+    return memory_get(&mem, 0, dest, (size_t)src, bytes);
 }
-static void mem_store(RV_Ptr dest, void *src, uint8_t bytes){
-    memory_set(dest, src, bytes);
+static int mem_store(RV_Env *this, RV_Ptr dest, void *src, uint8_t bytes){
+    return memory_set(&mem, 0, dest, src, bytes);
 }
 
 int main(int argc, char const *argv[])
 {
     int ret = 0;
-    init_error_handler();
-    memory_init("world.img");
+    init_global_error_handler();
+    memory_init(&factory, &mem);
 
     bin = fopen("../demo/helloworld/hello.bin", "r");
     if(bin == NULL){
@@ -65,7 +70,7 @@ int main(int argc, char const *argv[])
         if(size < 1){
             break;
         }
-        vm.mem_store(i, &cmd, 4);
+        vm.mem_store(&vm, i, &cmd, 4);
     }
     (void)fclose(bin);
     bin = NULL;
@@ -73,30 +78,20 @@ int main(int argc, char const *argv[])
     char* target_ptr = target;
     while(1){
         RV_Cmd cmd = 0;
-        vm.mem_load(&cmd, (RV_Ptr)vm.reg_pc, sizeof(RV_Cmd));
-        if(vm.reg_pc == 0x10){
+        vm.mem_load(&vm, &cmd, (RV_Ptr)vm.reg_pc, sizeof(RV_Cmd));
+        if(vm.reg_pc == 0x10){// exit:
             break;
         }
         if(cmd == 0){
-            RV_Ptr ptr = vm.regs[11];
-            RV_Int len = vm.regs[12];
-            if(len != sizeof(target) - 1){
+            char c = vm.regs[11];
+            if(*target_ptr != c){
+                ret = 1;
+                goto memory_deinit;
+            }else if(*target_ptr == '\0'){
                 ret = 1;
                 goto memory_deinit;
             }
-            for(int i=0; i<len; i++){
-                char c;
-                vm.mem_load(&c, ptr+i, 1);
-                if(*target_ptr != c){
-                    ret = 1;
-                    goto memory_deinit;
-                }else if(*target_ptr == '\0'){
-                    ret = 1;
-                    goto memory_deinit;
-                }
-                // putchar(c);
-                target_ptr++;
-            }
+            target_ptr++;
             vm.reg_pc+=4;
             continue;
         }
@@ -106,6 +101,6 @@ int main(int argc, char const *argv[])
         ret = 1;
     }
 memory_deinit:
-    memory_deinit();
+    memory_deinit(&mem);
     return ret;
 }

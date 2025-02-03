@@ -6,6 +6,7 @@
 #include <stdlib.h>
 
 #include "error.h"
+#include "vm.h"
 
 /* elf validity check */
 static inline int is_elf_valid(Elf32_Ehdr *header)
@@ -163,4 +164,67 @@ size_t elf2bin(FILE *input, void **buffer)
 
     *buffer = data;
     return program_size;
+}
+
+int install_elf(FILE* elf, VM_t* vm){
+    assert(vm != NULL);
+    assert(elf != NULL);
+
+    Elf32_Ehdr elf_header = {0};
+    if (read_data(elf, &elf_header, 0, sizeof(Elf32_Ehdr), 1))
+    {
+        ERROR_LOG("can't get elf header\n");
+        return 0;
+    }
+    if (!is_elf_valid(&elf_header))
+    {
+        return 0;
+    }
+
+    Elf32_Phdr program_header[elf_header.e_phnum];
+    if (read_data(elf, &program_header, elf_header.e_phoff, elf_header.e_phentsize, elf_header.e_phnum))
+    {
+        ERROR_LOG("can't read program header\n");
+        return 0;
+    }
+
+    size_t program_size = 0;
+
+    for (size_t i = 0; i < elf_header.e_phnum; i++)
+    {
+        Elf32_Phdr *header = &program_header[i];
+        if (header->p_type != PT_LOAD)
+        {
+            continue;
+        }
+        if(!memory_can_set(&vm->mem, vm->cur_uid, header->p_vaddr + header->p_offset, header->p_filesz)){
+            return 1;
+        }
+        size_t top = header->p_filesz + header->p_vaddr;
+        if (top > program_size)
+        {
+            program_size = top;
+        }
+    }
+    if (program_size == 0)
+    {
+        return 0;
+    }
+
+    for (size_t i = 0; i < elf_header.e_phnum; i++)
+    {
+        Elf32_Phdr *header = &program_header[i];
+        if (header->p_type != PT_LOAD)
+        {
+            continue;
+        }
+
+        if (read_data(elf, (uint8_t*)(vm->mem.mem) + header->p_vaddr, header->p_offset, header->p_filesz, 1))
+        {
+            ERROR_LOG("can't read from program header\n");
+            return 1;
+        }
+    }
+
+    return 0;
 }
